@@ -25,8 +25,11 @@ import { getOWSWallet } from '@open-wallet-standard/core';
 // 1. Get standard OWS wallet
 const rawWallet = await getOWSWallet();
 
-// 2. Wrap it with ThoughtProof Security
-const secureWallet = new ThoughtProofOWSInterceptor(rawWallet);
+// 2. Wrap it with ThoughtProof Security (requires API key or MPP header)
+const secureWallet = new ThoughtProofOWSInterceptor(rawWallet, {
+    apiKey: process.env.THOUGHTPROOF_API_KEY,
+    failClosed: true // Blocks tx if verification service is unreachable
+});
 
 // 3. Agent tries to buy a known rugpull token
 try {
@@ -39,6 +42,9 @@ try {
     console.error(e);
 }
 ```
+
+## Security Posture
+By default, the Interceptor is **Fail-Closed**. If the verification API is unreachable or times out, the signature is blocked to protect the agent's funds. You can override this behavior by setting `failClosed: false` for development.
 
 ## Why this matters for OWS
 OWS solves the *key management* problem (one vault, every chain). 

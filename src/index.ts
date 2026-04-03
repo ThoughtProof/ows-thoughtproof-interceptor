@@ -2,11 +2,6 @@ import { fetch } from 'cross-fetch';
 
 /**
  * ThoughtProof Interceptor for the Open Wallet Standard (OWS)
- * 
- * This middleware wraps an OWS-compliant wallet. Before the wallet signs
- * a transaction, it sends the calldata to ThoughtProof's Verification Layer.
- * If the multi-model consensus returns "BLOCK" (e.g., high slippage, known rugpull),
- * the signature is denied, protecting the agent's funds.
  */
 
 export interface OWSWallet {
@@ -15,12 +10,22 @@ export interface OWSWallet {
     getAddress: () => Promise<string>;
 }
 
+export interface ThoughtProofConfig {
+    apiKey: string;
+    failClosed?: boolean; // Default true: Block tx if verification fails/timeouts
+}
+
 export class ThoughtProofOWSInterceptor implements OWSWallet {
     private wallet: OWSWallet;
+    private config: ThoughtProofConfig;
     private tpEndpoint = 'https://thoughtproof-api.vercel.app/v1/check';
 
-    constructor(wallet: OWSWallet) {
+    constructor(wallet: OWSWallet, config: ThoughtProofConfig) {
         this.wallet = wallet;
+        this.config = {
+            failClosed: true,
+            ...config
+        };
     }
 
     async getAddress() {
@@ -33,12 +38,19 @@ export class ThoughtProofOWSInterceptor implements OWSWallet {
         try {
             const response = await fetch(this.tpEndpoint, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: { 
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${this.config.apiKey}`
+                },
                 body: JSON.stringify({
                     claim: `Agent requesting transaction to ${tx.to} with data ${tx.data || '0x'}`,
                     speed: 'fast'
                 })
             });
+
+            if (!response.ok) {
+                throw new Error(`API Error: ${response.status}`);
+            }
 
             const result = await response.json();
 
@@ -51,9 +63,16 @@ export class ThoughtProofOWSInterceptor implements OWSWallet {
             console.log(`[ThoughtProof] ✅ Transaction APPROVED by consensus.`);
         } catch (err: any) {
             if (err.message.includes('ThoughtProof Security Block')) {
-                throw err;
+                throw err; // Always re-throw actual security blocks
             }
-            console.warn(`[ThoughtProof] Verification service unreachable. Proceeding with caution.`);
+            
+            console.error(`[ThoughtProof] Verification service error: ${err.message}`);
+            
+            if (this.config.failClosed) {
+                throw new Error(`ThoughtProof Fail-Closed: Could not verify transaction safety. Blocking signature.`);
+            } else {
+                console.warn(`[ThoughtProof] Warning: Proceeding without verification (failClosed = false)`);
+            }
         }
     }
 
